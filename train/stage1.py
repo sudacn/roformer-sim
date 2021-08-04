@@ -3,7 +3,9 @@
 # 训练环境：tensorflow 1.14 + keras 2.3.1 + bert4keras 0.10.6
 
 import json
+import ipdb
 import numpy as np
+import pandas as pd 
 from bert4keras.backend import keras, K
 from bert4keras.layers import Loss
 from bert4keras.models import build_transformer_model
@@ -16,28 +18,25 @@ import jieba
 jieba.initialize()
 
 # 基本信息
-maxlen = 64
-batch_size = 96
-steps_per_epoch = 1000
-epochs = 10000
+maxlen = 20
+batch_size = 50
+steps_per_epoch = 100
+epochs = 10
 
 # bert配置
-config_path = '/root/kg/bert/chinese_roformer-char_L-12_H-768_A-12/bert_config.json'
-checkpoint_path = '/root/kg/bert/chinese_roformer-char_L-12_H-768_A-12/bert_model.ckpt'
-dict_path = '/root/kg/bert/chinese_roformer-char_L-12_H-768_A-12/vocab.txt'
+config_path = '/root/ft_local/bert/chinese_roformer-sim-char_L-12_H-768_A-12/bert_config.json'
+checkpoint_path = '/root/ft_local/bert/chinese_roformer-sim-char_L-12_H-768_A-12/bert_model.ckpt'
+dict_path = '/root/ft_local/bert/chinese_roformer-sim-char_L-12_H-768_A-12/vocab.txt'
+train_path = '/root/Gen-model/user_data/tmp_data/test_train.json'
+csv_path = '/root/ft_local/model_data/hospital_sample.csv'
 
 # 建立分词器
 tokenizer = Tokenizer(dict_path, do_lower_case=True)
 
-
-def read(filename):
-    """读取语料，每行一个json
-    """
-    while True:
-        with open(filename) as f:
-            for l in f:
-                yield json.loads(l)
-
+def load():
+    f1 = pd.read_csv(csv_path)
+    # for i in range
+    return f1
 
 def split(text):
     """分割句子
@@ -45,33 +44,34 @@ def split(text):
     seps, strips = u'\n。！？!?；;，, ', u'；;，, '
     return text_segmentate(text, maxlen * 1.2, seps, strips)
 
-
 def corpus():
     """读取语料
     """
-    f1 = read('/root/data_pretrain/synonyms_shuf.json')
-    f2 = read('/root/data_pretrain/synonym_answers_shuf.json')
-    f3 = read('/root/data_pretrain/synonym/synonym_gen_2_shuf.json')
-    while True:
-        d = next(f1)
-        text, synonyms = d['text'], d['synonyms']
-        text, synonym = np.random.permutation([text] + synonyms)[:2]
-        text, synonym = split(text)[0], split(synonym)[0]
-        yield text, synonym
-        d = next(f2)
-        text, synonym = d['text_a'], d['text_b']
-        text, synonym = split(text)[0], split(synonym)[0]
-        yield text, synonym
-        d = next(f1)
-        text, synonyms = d['text'], d['synonyms']
-        text, synonym = np.random.permutation([text] + synonyms)[:2]
-        text, synonym = split(text)[0], split(synonym)[0]
-        yield text, synonym
-        d = next(f3)
-        text, synonym = d['text_a'], d['text_b']
-        text, synonym = split(text)[0], split(synonym)[0]
-        yield text, synonym
+    d = load()
 
+    
+    for line in range(d.shape[0]):
+        # d = next(f1)
+        # ipdb.set_trace()  
+        
+        text, address, synonyms = d['pname'][line], d['address'][line], d['query_list'][line].split(";")
+        for i in synonyms:
+            text, synonym = text, np.random.permutation(synonyms[:5])[0]
+            text, synonym = split(text)[0], split(synonym)[0]
+            yield text+"-"+address, synonym
+        # d = next(f2)
+        # text, synonym = d['text_a'], d['text_b']
+        # text, synonym = split(text)[0], split(synonym)[0]
+        # yield text, synonym
+        # d = next(f1)
+        # text, synonyms = d['text'], d['synonyms']
+        # text, synonym = np.random.permutation([text] + synonyms)[:2]
+        # text, synonym = split(text)[0], split(synonym)[0]
+        # yield text, synonym
+        # d = next(f3)
+        # text, synonym = d['text_a'], d['text_b']
+        # text, synonym = split(text)[0], split(synonym)[0]
+        # yield text, synonym
 
 def masked_encode(text):
     """wwm随机mask
@@ -110,7 +110,7 @@ class data_generator(DataGenerator):
     def __iter__(self, random=False):
         batch_token_ids, batch_segment_ids = [], []
         for is_end, (text, synonym) in self.sample(random):
-            for i in range(2):
+            for i in range(1): # 单向
                 if np.random.random() < 0.5:
                     text_ids = masked_encode(text)[0]
                 else:
@@ -121,10 +121,10 @@ class data_generator(DataGenerator):
                 segment_ids = [0] * len(text_ids) + [1] * len(synonym_ids)
                 batch_token_ids.append(token_ids)
                 batch_segment_ids.append(segment_ids)
-                self.some_samples.append(synonym)
+                self.some_samples.append(text)
                 if len(self.some_samples) > 1000:
                     self.some_samples.pop(0)
-                text, synonym = synonym, text
+                # text, synonym = synonym, text
             if len(batch_token_ids) == self.batch_size or is_end:
                 batch_token_ids = sequence_padding(batch_token_ids)
                 batch_segment_ids = sequence_padding(batch_segment_ids)
