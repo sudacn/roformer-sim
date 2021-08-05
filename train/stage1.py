@@ -3,7 +3,10 @@
 # 训练环境：tensorflow 1.14 + keras 2.3.1 + bert4keras 0.10.6
 
 import json
+from operator import is_
 import ipdb
+import sys
+from ipdb.__main__ import main
 import numpy as np
 import pandas as pd 
 from bert4keras.backend import keras, K
@@ -15,26 +18,17 @@ from bert4keras.snippets import DataGenerator, sequence_padding
 from bert4keras.snippets import text_segmentate, truncate_sequences
 from bert4keras.snippets import AutoRegressiveDecoder
 import jieba
+from pandas.io.parsers import read_csv
 jieba.initialize()
+sys.path.append('/root/gitWOA/roformer-sim')
+from config import Config
 
-# 基本信息
-maxlen = 20
-batch_size = 50
-steps_per_epoch = 100
-epochs = 10
-
-# bert配置
-config_path = '/root/ft_local/bert/chinese_roformer-sim-char_L-12_H-768_A-12/bert_config.json'
-checkpoint_path = '/root/ft_local/bert/chinese_roformer-sim-char_L-12_H-768_A-12/bert_model.ckpt'
-dict_path = '/root/ft_local/bert/chinese_roformer-sim-char_L-12_H-768_A-12/vocab.txt'
-train_path = '/root/Gen-model/user_data/tmp_data/test_train.json'
-csv_path = '/root/ft_local/model_data/hospital_sample.csv'
 
 # 建立分词器
-tokenizer = Tokenizer(dict_path, do_lower_case=True)
+tokenizer = Tokenizer(Config.dict_path, do_lower_case=True)
 
 def load():
-    f1 = pd.read_csv(csv_path)
+    f1 = pd.read_csv(Config.train_path)
     # for i in range
     return f1
 
@@ -42,20 +36,17 @@ def split(text):
     """分割句子
     """
     seps, strips = u'\n。！？!?；;，, ', u'；;，, '
-    return text_segmentate(text, maxlen * 1.2, seps, strips)
+    return text_segmentate(text, Config.maxlen * 1.2, seps, strips)
 
 def corpus():
     """读取语料
     """
     d = load()
-
-    
     for line in range(d.shape[0]):
         # d = next(f1)
-        # ipdb.set_trace()  
-        
+        # ipdb.set_trace() 
         text, address, synonyms = d['pname'][line], d['address'][line], d['query_list'][line].split(";")
-        for i in synonyms:
+        for i in synonyms[:10]:
             text, synonym = text, np.random.permutation(synonyms[:5])[0]
             text, synonym = split(text)[0], split(synonym)[0]
             yield text+"-"+address, synonym
@@ -72,6 +63,19 @@ def corpus():
         # text, synonym = d['text_a'], d['text_b']
         # text, synonym = split(text)[0], split(synonym)[0]
         # yield text, synonym
+
+def corpus_test():
+    """
+    读取语料
+    """
+    d = read_csv(Config.test_path)
+    texts = []
+    for line in range(d.shape[0]):
+        # d = next(f1)
+        # ipdb.set_trace()  
+        text, address, synonyms = d['pname'][line], d['address'][line], d['query_list'][line].split(";")
+        texts.append(text+"-"+address)
+    return texts
 
 def masked_encode(text):
     """wwm随机mask
@@ -95,8 +99,8 @@ def masked_encode(text):
         else:
             source.extend(ids)
             target.extend([0] * len(ids))
-    source = source[:maxlen - 1] + [tokenizer._token_end_id]
-    target = target[:maxlen - 1] + [0]
+    source = source[:Config.maxlen - 1] + [tokenizer._token_end_id]
+    target = target[:Config.maxlen - 1] + [0]
     return source, target
 
 
@@ -110,13 +114,13 @@ class data_generator(DataGenerator):
     def __iter__(self, random=False):
         batch_token_ids, batch_segment_ids = [], []
         for is_end, (text, synonym) in self.sample(random):
-            for i in range(1): # 单向
+            for i in range(1): # 单向 1  双向 2 
                 if np.random.random() < 0.5:
                     text_ids = masked_encode(text)[0]
                 else:
                     text_ids = tokenizer.encode(text)[0]
                 synonym_ids = tokenizer.encode(synonym)[0][1:]
-                truncate_sequences(maxlen * 2, -2, text_ids, synonym_ids)
+                truncate_sequences(Config.maxlen * 2, -2, text_ids, synonym_ids)
                 token_ids = text_ids + synonym_ids
                 segment_ids = [0] * len(text_ids) + [1] * len(synonym_ids)
                 batch_token_ids.append(token_ids)
@@ -125,7 +129,7 @@ class data_generator(DataGenerator):
                 if len(self.some_samples) > 1000:
                     self.some_samples.pop(0)
                 # text, synonym = synonym, text
-            if len(batch_token_ids) == self.batch_size or is_end:
+            if len(batch_token_ids) == Config.batch_size or is_end:
                 batch_token_ids = sequence_padding(batch_token_ids)
                 batch_segment_ids = sequence_padding(batch_segment_ids)
                 yield [batch_token_ids, batch_segment_ids], None
@@ -174,10 +178,10 @@ class TotalLoss(Loss):
         return labels
 
 
-# 建立加载模型
+# 建立模型，加载模型权重
 roformer = build_transformer_model(
-    config_path,
-    checkpoint_path,
+    Config.config_path,
+    Config.checkpoint_path,
     model='roformer',
     application='unilm',
     with_pool='linear',
@@ -209,15 +213,23 @@ class SynonymsGenerator(AutoRegressiveDecoder):
         return self.last_token(seq2seq).predict([token_ids, segment_ids])
 
     def generate(self, text, n=1, topp=0.95):
-        token_ids, segment_ids = tokenizer.encode(text, maxlen=maxlen)
+        token_ids, segment_ids = tokenizer.encode(text, maxlen=Config.maxlen)
         output_ids = self.random_sample([token_ids, segment_ids], n,
                                         topp=topp)  # 基于随机采样
         return [tokenizer.decode(ids) for ids in output_ids]
 
 
 synonyms_generator = SynonymsGenerator(
-    start_id=None, end_id=tokenizer._token_end_id, maxlen=maxlen
+    start_id=None, end_id=tokenizer._token_end_id, maxlen=Config.maxlen
 )
+
+def is_good_generator(synonym,text):
+    # words = jieba.lcut(synonym)
+    for word in synonym:
+        if word not in text:
+            return False
+    return True 
+
 
 
 def gen_synonyms(text, n=100, k=20):
@@ -238,8 +250,11 @@ def gen_synonyms(text, n=100, k=20):
             u'微信和支付宝选哪个好',
         ]
     """
+    text_list = text.split("-")
     r = synonyms_generator.generate(text, n)
-    r = [i for i in set(r) if i != text]
+    r = [i for i in set(r) if i not in text_list and is_good_generator(i,text)]
+    r = sorted(r,key=lambda i : len(i),reverse=False)
+    # print(r)
     r = [text] + r
     X, S = [], []
     for t in r:
@@ -251,11 +266,13 @@ def gen_synonyms(text, n=100, k=20):
     Z = encoder.predict([X, S])
     Z /= (Z**2).sum(axis=1, keepdims=True)**0.5
     argsort = np.dot(Z[1:], -Z[0]).argsort()
-    return [r[i + 1] for i in argsort[:k]]
-
+    result =  [r[i + 1] for i in argsort[:k]]
+    result = sorted(result, key = lambda i:len(i),reverse=False )
+    return result
 
 def just_show():
-    """随机观察一些样本的效果
+    """
+    随机观察一些样本的效果
     """
     some_samples = train_generator.some_samples
     S = [np.random.choice(some_samples) for i in range(3)]
@@ -268,6 +285,18 @@ def just_show():
         except:
             pass
 
+def just_show_test():
+    
+    S = corpus_test()
+    # print(S)
+    for s in S:
+        try:
+            print(u'原句子：%s' % s)
+            print(u'同义句子：')
+            print(gen_synonyms(s, 10, 10))
+            print()
+        except:
+            pass
 
 class Evaluate(keras.callbacks.Callback):
     """评估模型
@@ -276,27 +305,28 @@ class Evaluate(keras.callbacks.Callback):
         self.lowest = 1e10
 
     def on_epoch_end(self, epoch, logs=None):
-        model.save_weights('./latest_model.weights')
+        model.save_weights(Config.last_model_path)
         # 保存最优
         if logs['loss'] <= self.lowest:
             self.lowest = logs['loss']
-            model.save_weights('./best_model.weights')
+            model.save_weights(Config.best_model_path)
         # 演示效果
         just_show()
-
+            
 
 if __name__ == '__main__':
 
-    train_generator = data_generator(corpus(), batch_size)
-    evaluator = Evaluate()
-
-    model.fit_generator(
-        train_generator.forfit(),
-        steps_per_epoch=steps_per_epoch,
-        epochs=epochs,
-        callbacks=[evaluator]
-    )
+    train_generator = data_generator(corpus(), Config.batch_size)
+    # evaluator = Evaluate()
+    # model.fit_generator(
+    #     train_generator.forfit(),
+    #     steps_per_epoch=Config.steps_per_epoch,
+    #     epochs=Config.epochs,
+    #     callbacks=[evaluator]
+    # )
+    model.load_weights(Config.best_model_path)
+    just_show_test()
 
 else:
-
-    model.load_weights('./latest_model.weights')
+    model.load_weights(Config.best_model_path)
+    just_show_test()
