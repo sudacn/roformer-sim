@@ -253,7 +253,7 @@ def gen_synonyms(text, n=100, k=20):
     text_list = text.split("-")
     r = synonyms_generator.generate(text, n)
     r = [i for i in set(r) if i not in text_list and is_good_generator(i,text)]
-    r = sorted(r,key=lambda i : len(i),reverse=False)
+    # r = sorted(r,key=lambda i : len(i),reverse=False)
     # print(r)
     r = [text] + r
     X, S = [], []
